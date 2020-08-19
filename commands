@@ -1,0 +1,423 @@
+
+#download RNA sequence from NCBI in SRA format
+prefetch ${SRA accession} 
+
+#convert downloaded SRA file into zipped FASTQ format
+nohup fastq-dump \
+-I --split-files --gzip ${SRA_file} \
+-O ${path_to_save_FASTQ_file}
+
+#quality control using fastQC
+nohup fastqc ${FASTQ_file} \
+-o ${path_to_save_output}
+
+#build HISAT2 index
+hisat2-build \
+-f ${refrence_FASTA_file}\
+${hisat2_index_prefix}
+
+#alignment using HISAT2
+hisat2 -k 10 --no-mixed \
+--no-discordant \
+-p {threads}\
+-q -x ${hisat2_index}\
+-U ${FASTQ_file}\
+-S ${HISAT2_sam_file}
+
+#converting SAM into BAM file
+samtools view \
+-bo ${HISAT2_bam_file} ${ HISAT2_sam_file}
+samtools flagstat ${HISAT2_bam_file}
+ 
+#quantification by featureCounts using HISAT2 BAM file 
+nohup featureCounts -a ${refrence_GTF_file} \
+-t exon -g gene_id \
+-o ${HISAT2_quantification_prefix} ${HISAT2_bam_file}
+
+#build STAR index 
+STAR --runThreadN 6 \
+--runMode genomeGenerate --genomeDir ${star_index}\
+ --genomeFastaFiles ${refrence_FASTA_file}\
+--sjdbGTFfile ${refrence_GTF_file}\ 
+--sjdbOverhang 99
+
+#alignment and quantification using STAR 2-pass mode
+STAR --runMode alignReads --genomeDir ${STAR_index}\
+ --readFilesIn ${FASTQ_file}\
+ --runThreadN 6 ulimit -n 10000\
+ --quantMode GeneCounts\ 
+--outFileNamePrefix ${STAR_output1} --outSAMtype BAM SortedByCoordinate 
+
+
+STAR --runMode alignReads --genomeDir ${STAR_index}\
+ --readFilesIn ${FASTQ_file}\
+--runThreadN 6 \
+--sjdbFileChrStartEnd ${STAR_output1SJ.out.tab}\
+ --quantMode GeneCounts\
+--outFileNamePrefix ${STAR_output2} --outSAMtype BAM SortedByCoordinate 
+
+#converting STAR SAM file into BAM file
+samtools view \
+-bo ${ STAR_output2_bam_file} ${ STAR_output2_sam_file}
+samtools flagstat ${ STAR_output2_bam_file}
+
+#quantification by featureCounts using HISAT2 and STAR BAM file 
+nohup featureCounts -a ${refrence_GTF_file} \
+-t exon -g gene_id \
+-o ${quantification_output_prefix} ${bam_file}
+
+# featureCounts results were loaded on R Studio and a matrix with raw counts along with gene ID as row names was formed each
+#5 rheumatoid arthritis samples and 5 healthy samples as control were uploaded first for differential expression analysis
+
+ ra1_h <- read.table("${HISAT2+featureCounts_quantification_result}")
+
+ra1_ch <- matrix(data =ra1_h$V7[2:60684], nrow = 60683, ncol = 1,
+                 dimnames = list(c= (ra1_h$V1[2:60684]),
+                                 c("ra1")))
+#this was repeated with rest 9 samples and the matrix were combined
+count_table_h <- cbind(ra1_ch, ra2_ch, ra3_ch, ra4_ch, ra5_ch, h1_ch, h2_ch, h3_ch, h4_ch, h5_ch)
+#converting into numeric matrix
+class(count_table_h)<-"numeric"
+
+#creating DESeqdataset from matrix count_table_h
+deseq_dataset_h <- DESeqDataSetFromMatrix(countData = count_table_h ,
+                                          colData = pheno , design = ~cd)
+#Similar steps were repeated for STAR+featureCounts_quantification_result as well to create DESeqdataset 
+
+
+#building kallisto index 
+ kallisto index \
+-i ${kallisto_index} ${refrence_transcripts_FASTA_file} 
+
+# quantification by kallisto
+nohup kallisto quant\
+-i ${kallisto_index}  -o ${kallisto_quantification_output}
+--single -l 150 -s 55 ${FASTQ_file} 
+
+#importing kallisto quantification results to R studio and converting transcript level abundances to gene-level
+#5 rheumatoid arthritis samples and 5 healthy samples as control were uploaded first for differential rxpression analysis
+count_table_k= tximport(files = ${named_vector_pointing_to_quantification files})
+         type = "kallisto",
+         tx2gene = ${data.frame with transcript ID & gene ID},
+         ignoreTxVersion = TRUE) 
+
+#creating DESeqdataset from imported count_table_k
+pheno <- data.frame(cd = c("ra", "ra", "ra", "ra", "ra", "h" , "h" , "h" , "h" , "h"))
+deseq_dataset_k = DESeqDataSetFromTximport(txi = count_table_k,
+                                           colData = pheno,
+                                           design = ~cd)
+#Once DESeqdataset was created using each kallisto , HISAT2+featureCounts & STAR+featureCounts output, following steps were followed to get DESeq2, GSEA and ORT results
+
+# pre-filtering to keep only rows that have at least 10 reads total
+keep <- rowSums(counts(deseq_dataset_k)) >= 10
+deseq_dataset_k <- deseq_dataset_k[keep,]
+
+#estimation of size factors
+deseq_dataset_k <- estimateSizeFactors(deseq_dataset_k)
+sizeFactors(d eseq_dataset_k)
+
+#normalistion 
+norm_counts_k = counts(deseq_dataset_k, normalized = TRUE)
+
+# estimation of dispersion
+deseq_dataset_k <- estimateDispersions(deseq_dataset_k)
+plotDispEsts(deseq_dataset_k)
+
+# negative binomial GLM fitting and Wald statistics
+deseq_dataset_k <- nbinomWaldTest(deseq_dataset_k)
+results(deseq_dataset_k)
+
+# specifying to make comparison between ra and h samples and final DESeq2 results are storred in variable results_table_k
+results_table_k <- results(deseq_dataset_k , contrast = c("cd", "ra", "h"))
+
+#plotting MA plot
+plotMA(deseq_dataset_k , alpha = 0.01)
+
+#plotting heatmap & PCA plots 
+rlog_data_k <- rlogTransformation(deseq_dataset_k , blind = TRUE)
+dist_rl_k = dist(t(assay(rlog_data_k)))
+dist_mat_k = as.matrix(dist_rl_k)
+heatmap.2(dist_mat_k , trace = "none")
+plotPCA(rlog_data_k , intgroup = "cd")
+
+# final deseq2 results are stored in variable d and used to construct volcano plot
+d$Significance_type <- "NS"
+idx <- which(abs(d$log2FoldChange) > 1)
+d$Significance_type[idx] <- "Log2 FC"
+idx <- which(d$padj < 0.05)
+d$Significance_type[idx] <- "p-value"
+idx <- which(abs(d$log2FoldChange) > 1 & d$padj < 0.05)
+d$Significance_type[idx] <- "p-value and Log2FC"
+
+# to control the order they appear in the plot
+d$Significance_type <- factor(d$Significance_type,
+                              levels = c("NS", "Log2 FC", "p-value",
+                                         "p-value and Log2FC"))
+
+p <- ggplot(d, aes(x = log2FoldChange, y = -log10(padj))) +
+  geom_point(aes(color = Significance_type), size = 1, alpha = 0.4 ) +
+  scale_color_manual(values = c("black","green","blue","red")) +
+  theme_bw(base_size = 14)
+show(p)
+
+#adding ensembl gene ID as an additional column to final DESeq2 results
+h_final_k <- rownames_to_column(d, var = "ensembl_gene_id")
+h_final_k <- left_join(h_final_k, grch38,
+                       by = c("ensembl_gene_id" = "ensgene"))
+#applying strict cut-off
+s_cutoff_k <- d[d$padj < 0.05 & abs(d$log2FoldChange) > 1,]
+
+# final deseq2 results are stored in variable d and was used for functional analysis
+#setting homo sapiens as organism
+
+organism = "org.Hs.eg.db"
+
+#adding ensemble gene ID as additional column
+d <- rownames_to_column(d, var = "ensembl_gene_id")
+
+#removing observations which not available P value
+d <- filter(d, !is.na(pvalue))
+
+# extracting log2fold change along with ensemble gene ID as their names
+g_list_k <- d$log2FoldChange
+names(g_list_k) <- d$ensembl_gene_id
+
+# sort the list in decreasing order
+g_list_k = sort(g_list_k, decreasing = TRUE)
+
+#GO based GSEA analysis
+gsk<- gseGO(geneList=g_list_k, 
+               ont ="ALL", 
+               keyType = "ENSEMBL", 
+               nPerm = 10000, 
+               minGSSize = 3, 
+               maxGSSize = 800, 
+               pvalueCutoff = 0.05, 
+               verbose = TRUE, 
+               OrgDb = organism, 
+               pAdjustMethod = "none")
+
+#plotting dot plot and cnet plots
+dotplot(gsk, showCategory=10, split=".sign") + facet_grid(.~.sign)
+
+gsk2 <- setReadable(gse_s, 'org.Hs.eg.db', 'ENSEMBL')
+cnetplot(gsk2, categorySize="pvalue", foldChange=g_list_s, 
+         node_label = "none")
+
+
+# for KEGG based GSEA anlysis converting ensemble gene ID into entrez ID
+
+id_k <-bitr(names(g_list_k), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb=organism)
+
+# extracting log2fold change along with entrez gene ID as their names
+dk <- left_join(d, id_k, by=c("ensembl_gene_id" = "ENSEMBL"))
+
+kegg_gene_list_k <- dk$log2FoldChange
+
+names(kegg_gene_list_k) <- dk$ENTREZID
+
+
+# sort the list in decreasing order 
+kegg_gene_list_k = sort(kegg_gene_list_k, decreasing = TRUE)
+
+#for homo sapiens as organism
+kegg_organism = "hsa"
+kkk<- gseKEGG(geneList     = kegg_gene_list_k,
+                organism     = kegg_organism,
+                nPerm        = 10000,
+                minGSSize    = 3,
+                maxGSSize    = 800,
+                pvalueCutoff = 0.05,
+                pAdjustMethod = "none",
+                keyType       = "ncbi-geneid")
+
+#plotting dot plot and cnet plots
+dotplot(kkk, showCategory = 10, title = "Enriched Pathways" , split=".sign") + facet_grid(.~.sign)
+
+kkk2 <- setReadable(kk_s, 'org.Hs.eg.db', 'ENTREZID')
+cnetplot(kkk2, categorySize="pvalue", foldChange=kegg_gene_list_s, 
+         node_label = "none")
+
+# for ORT analysis genes with padj < 0.005 and absolute log2FoldChange > 2
+
+sig_genes_k = subset(d, padj < 0.05)
+
+
+genes_k <- sig_genes_d$log2FoldChange
+
+names(genes_k) <- sig_genes_ k$ensembl_gene_id
+
+# filter on min log2fold change 
+genes_k <- names(genes_k)[abs(genes_k) > 2]
+
+# ORT using enrichGO
+go_enrich_k <- enrichGO(gene = genes_k,
+                        universe = names(g_list_k),
+                        OrgDb = organism, 
+                        keyType = 'ENSEMBL',
+                        readable = T,
+                        ont = "BP",
+                        pvalueCutoff = 0.05, 
+                        qvalueCutoff = 0.1)
+
+#plots to view ORT results
+dotplot(go_enrich_s)
+barplot(go_enrich_s, 
+        drop = TRUE, 
+        showCategory = 10, 
+        title = "GO Biological Pathways",
+        font.size = 8)
+
+#all the steps above were repeated with DESeqdataset obtained from kallisto, HISAT2+featureCounts & STAR+featureCounts output as well to star data analysis
+
+#venn diagrams for the DEGs (predicted by 3 methods) and that passed strict cut-off
+
+v2 <- list(m1 = s_cutoff_k $ensembl_gene_id, #from kallisto based DESeq2 output 
+           m2 = s_cutoff _h$ensembl_gene_id, #from HISAT2 based DESeq2 output
+           m3 = s_cutoff _s$ensembl_gene_id) #from STAR based DESeq2 output
+
+venn.diagram(x = v2, 
+             category.names = c("Kallisto", "Hisat2", "Star"), 
+             cex = 1.5,   cat.cex = 2,   sub.cex = 2, 
+             filename = '${path_to_save_file}’,
+             output=TRUE,
+             imagetype="png",
+             lty = 'blank',
+             fill=c("pink", "blue", "green"))
+
+
+#applying relaxed cut-off to final DESeq2 results 
+r_cutoff_k <- d[d$padj < 0.1 & abs(d$log2FoldChange) > 0.5,]
+
+
+#venn diagrams for the DEGs (predicted by 3 methods) that passed relaxed cut off
+venn_list <- list(Method1 = r_cutoff_k$ensembl_gene_id, # kallisto based DESeq2 output
+                  Method2 = r_cutoff_h$ensembl_gene_id,  #from HISAT2 based DESeq2 output
+                  Method3 = r_cutoff_s$ensembl_gene_id)  #from STAR based DESeq2 output
+
+venn.diagram(x = venn_list, 
+             category.names = c("Kallisto", "Hisat2", "Star"), 
+             cex = 1.5,   cat.cex = 2,   sub.cex = 2, 
+             filename = '${path_to_save_file}’,
+             output=TRUE,
+             imagetype="png",
+             lty = 'blank',
+             fill=c("pink", "blue", "green"))
+
+#venn diagram for total enriched GO terms by 3 methods
+g1 = as.data.frame(gsk) #from kallisto based GSEA(GO) analysis
+g1 = g1[g1$p.adjust < 0.05,]
+g2 = as.data.frame(gsh) #from HISAT2 based GSEA(GO) analysis
+g2 = g2[g2$p.adjust < 0.05,]
+g3 = as.data.frame(gss) #from STAR based GSEA(GO) analysis
+g3 = g3[g3$p.adjust < 0.05,]
+
+g4 <- list(m1 = g1$ID,
+           m2 = g2$ID, 
+           m3 = g3$ID)
+
+
+venn.diagram(x = g4, 
+             category.names = c("kallisto", "HISAT2", "STAR"), 
+             cex = 1.5,   cat.cex = 2,   sub.cex = 2, 
+             filename = '${path_to_save_file}’,
+             output=TRUE,
+             imagetype="png",
+             lty = 'blank',
+             fill=c("pink", "blue", "green"))
+
+#venn diagram for top 20 enriched GO terms by 3 methods
+tg <- list(m1 = g1$ID,
+           m2 = g2$ID, 
+           m3 = g3$ID)
+venn.diagram(x = tg, 
+             category.names = c("kallisto", "HISAT2", "STAR"), 
+             cex = 1.5,   cat.cex = 2,   sub.cex = 2, 
+             filename = '${path_to_save_file}’,
+             output=TRUE,
+             imagetype="png",
+             lty = 'blank',
+             fill=c("pink", "blue", "green"))
+
+#venn diagram for total enriched KEGG terms by 3 methods
+k1 = as.data.frame(kkk) #from kallisto based GSEA(KEGG) analysis
+k1 = g1[g1$p.adjust < 0.05,]
+k2 = as.data.frame(kkh) #from HISAT2 based GSEA(KEGG) analysis
+k2 = g2[g2$p.adjust < 0.05,]
+k3 = as.data.frame(kks) #from STAR based GSEA(GO) analysis
+k3 = g3[g3$p.adjust < 0.05,] 
+
+k4 <- list(m1 = k1$ID,
+           m2 = k2$ID, 
+           m3 = k3$ID)
+
+
+venn.diagram(x = k4, 
+             category.names = c("kallisto", "HISAT2", "STAR"), 
+             cex = 1.5,   cat.cex = 2,   sub.cex = 2, 
+             filename = '${path_to_save_file}’,
+             output=TRUE,
+             imagetype="png",
+             lty = 'blank',
+             fill=c("pink", "blue", "green"))
+
+
+#bar graph 
+# from final deseq2 results are stored as variable d, log2foldchange and baseMean values were extracted and a table was formed
+a1 <- d [,c(1,2)] 
+a1 <- rownames_to_column(a1, var = "ensembl_gene_id")
+a1<- na.omit(b1)
+
+#to find R2 values between each method top 1%, 10% and 25% expressed genes, genes were arranged in descending order of log2fold and according to total observations were extracted.
+a1 <- a1 [order(a1$baseMean, decreasing= TRUE ), ]
+b1 <- a1[1:299,] #top 1%
+c1 <- a1[1:2890,] #top 10%
+d1 <- a1[1:7225,] #top 25%
+
+#for bottom 75% 
+a1 <- a1[order(b1_a$baseMean),]
+e1 <- a1[1:21674,]
+
+#to find mean expression of top 1%, 10% and 25% 
+m1 <- mean(b	1$baseMean)
+m2 <- mean(c1$baseMean)
+m3 <- mean(d1$baseMean)
+
+#to know the number of genes which have expression equal or more than the mean expression of genes with top 1%, 10%, 25% of expression
+a1 <- a1[a1$baseMean >= m1,]
+a1 <- a1[a1$baseMean >= m2,]
+a1 <- a1[a1$baseMean >= m3,]
+
+
+#these steps were repeated with HISAT2 and STAR’s final DESeq2 output as well and the results were merged for total genes and genes with top 1%, 10%, 25% and bottom 75% expression
+a <- merge(a1, a2,  by = "ensembl_gene_id" , all = T) #a1 from kallisto based DESeq2 output
+a <- merge(a, a3], by = "ensembl_gene_id" , all = T)
+a <- na.omit(a) #a2 from HISAT2 based DESeq2 output; a3 from STAR based DESeq2 output
+
+#to find Pearson correlation coefficient between log2fold change predicted by each method
+x = a$log2FoldChange.x
+y = a$log2FoldChange.y
+plot(x,y)
+cor(x,y)
+
+#to find R2 between log2fold change predicted each by method
+lmout = lm (x ~ y)
+names(lmout)
+names(summary(lmout))
+summary(lmout)$r.squared
+
+#The above steps were repeated to get Pearson correlation coefficient and R2 values between each method and for total genes and genes with top 1%, 10%, 25% and bottom 75% . Once, all the R2 values were obtained following graph was used to obtain a bar graph for comparison. 
+
+kallisto_vs_hisat2 <- c( 0.4905581,  0.5429692, 0.4952502)
+kallisto_vs_star <- c( 0.495845, 0.5512833, 0.4970452)
+hisat2_vs_star <- c(0.9448613, 0.9056931, 0.8991806)
+Method <- c('ra', 'as', 'pa')
+
+
+df1 <- data.frame(kallisto_vs_hisat2, kallisto_vs_star, hisat2_vs_star, Method)
+df2 <- tidyr::pivot_longer(df1, cols=c('kallisto_vs_hisat2', 'kallisto_vs_star', 'hisat2_vs_star'), names_to='variable', values_to="R_squared")
+
+ggplot(df2, aes(x=Method, y=R_squared, fill=variable)) + geom_bar(stat='identity', position='dodge') + theme_gray(base_size = 18)
+
+#All the steps were repeated for ankylosing spondylitis and psoriatic arthritis samples as well. 
+
