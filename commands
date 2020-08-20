@@ -167,20 +167,20 @@ h_final_k <- left_join(h_final_k, grch38,
 #applying strict cut-off
 s_cutoff_k <- d[d$padj < 0.05 & abs(d$log2FoldChange) > 1,]
 
-# final deseq2 results are stored in variable d and was used for functional analysis
+# final deseq2 results are stored in variable dk and was used for functional analysis
 #setting homo sapiens as organism
 
 organism = "org.Hs.eg.db"
 
 #adding ensemble gene ID as additional column
-d <- rownames_to_column(d, var = "ensembl_gene_id")
+dk <- rownames_to_column(dk, var = "ensembl_gene_id")
 
 #removing observations which not available P value
-d <- filter(d, !is.na(pvalue))
+dk <- filter(dk, !is.na(pvalue))
 
 # extracting log2fold change along with ensemble gene ID as their names
-g_list_k <- d$log2FoldChange
-names(g_list_k) <- d$ensembl_gene_id
+g_list_k <- dk$log2FoldChange
+names(g_list_k) <- dk$ensembl_gene_id
 
 # sort the list in decreasing order
 g_list_k = sort(g_list_k, decreasing = TRUE)
@@ -205,12 +205,12 @@ cnetplot(gsk2, categorySize="pvalue", foldChange=g_list_s,
          node_label = "none")
 
 
-# for KEGG based GSEA anlysis converting ensemble gene ID into entrez ID
+# for KEGG based GSEA analysis converting ensemble gene ID into entrez ID
 
 id_k <-bitr(names(g_list_k), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb=organism)
 
 # extracting log2fold change along with entrez gene ID as their names
-dk <- left_join(d, id_k, by=c("ensembl_gene_id" = "ENSEMBL"))
+dk <- left_join(dk, id_k, by=c("ensembl_gene_id" = "ENSEMBL"))
 
 kegg_gene_list_k <- dk$log2FoldChange
 
@@ -363,10 +363,10 @@ venn.diagram(x = k4,
 
 
 #bar graph 
-# from final deseq2 results are stored as variable d, log2foldchange and baseMean values were extracted and a table was formed
-a1 <- d [,c(1,2)] 
+# from final deseq2 results are stored as variable dk, log2foldchange and baseMean values were extracted and a table was formed
+a1 <- dk[,c(1,2)] 
 a1 <- rownames_to_column(a1, var = "ensembl_gene_id")
-a1<- na.omit(b1)
+a1<- na.omit(a1)
 
 #to find R2 values between each method top 1%, 10% and 25% expressed genes, genes were arranged in descending order of log2fold and according to total observations were extracted.
 a1 <- a1 [order(a1$baseMean, decreasing= TRUE ), ]
@@ -395,17 +395,35 @@ a <- merge(a, a3], by = "ensembl_gene_id" , all = T)
 a <- na.omit(a) #a2 from HISAT2 based DESeq2 output; a3 from STAR based DESeq2 output
 
 #to find Pearson correlation coefficient between log2fold change predicted by each method
-x = a$log2FoldChange.x
-y = a$log2FoldChange.y
-plot(x,y)
-cor(x,y)
+xa = a$log2FoldChange.x
+ya = a$log2FoldChange.y
+za = a$log2FoldChange
+
+plot(xa,ya)
+plot(xa,za)
+plot(ya,za)
+
+cor(xa,ya)
+cor(xa,za)
+cor(ya,za)
+
+
 
 #to find R2 between log2fold change predicted each by method
-lmout = lm (x ~ y)
-names(lmout)
-names(summary(lmout))
-summary(lmout)$r.squared
+lmout1a = lm (xa ~ ya)
+names(lmout1a)
+names(summary(lmout1a))
+summary(lmout1a)$r.squared
 
+lmout2a = lm (xa ~ za)
+names(lmout2a)
+names(summary(lmout2a))
+summary(lmout2a)$r.squared
+
+lmout3a = lm (ya ~ za)
+names(lmout3a)
+names(summary(lmout3a))
+summary(lmout3a)$r.squared
 #The above steps were repeated to get Pearson correlation coefficient and R2 values between each method and for total genes and genes with top 1%, 10%, 25% and bottom 75% . Once, all the R2 values were obtained following graph was used to obtain a bar graph for comparison. 
 
 kallisto_vs_hisat2 <- c( 0.4905581,  0.5429692, 0.4952502)
@@ -419,5 +437,106 @@ df2 <- tidyr::pivot_longer(df1, cols=c('kallisto_vs_hisat2', 'kallisto_vs_star',
 
 ggplot(df2, aes(x=Method, y=R_squared, fill=variable)) + geom_bar(stat='identity', position='dodge') + theme_gray(base_size = 18)
 
-#All the steps were repeated for ankylosing spondylitis and psoriatic arthritis samples as well. 
+#for GSEA analysis of common genes  a table of just common genes was formed and strored in variable b_t
 
+b1 <- df_k[,c(1,3)] 
+b1 <- na.omit(b1)
+b2 <- df_h[,c(1,3)] 
+b1 <- na.omit(b1)
+b3 <- df_s[,c(1,3),]
+b3=na.omit(b3)
+b_t <- merge(b1, b2, by = "ensembl_gene_id" , all = T)
+b_t <- merge(b_t, b3, by = "ensembl_gene_id" , all = T)
+b_t <- na.omit(b_t)
+
+#Next from that table only the common DEG and its logfold 2 was used for GSEA analysis
+g_k <- b_t$log2FoldChange.x
+
+
+names(g_k) <- b_t$ensembl_gene_id
+
+# sort the list in decreasing order
+g_k = sort(g_k, decreasing = TRUE)
+ggsk <- gseGO(geneList=g_k, 
+               ont ="ALL", 
+               keyType = "ENSEMBL", 
+               nPerm = 10000, 
+               minGSSize = 3, 
+               maxGSSize = 800, 
+               pvalueCutoff = 0.05, 
+               verbose = TRUE, 
+               OrgDb = organism, 
+               pAdjustMethod = "none")
+
+
+
+#this was repeated for HISAT2 and kallisto as well. 
+#Venn diagram using enriched GO terms obtained from different methods was formed.
+
+gg1 = as.data.frame(ggsk)
+g1 = gg1[gg1$p.adjust < 0.05,]
+
+gg2 = as.data.frame(ggsh)
+gg2 = gg2[gg2$p.adjust < 0.05,]
+gg3 = as.data.frame(ggss)
+gg3 = g3[gg3$p.adjust < 0.05,]
+
+gg4 <- list(m1 = gg1$ID,
+           m2 = gg2$ID, 
+           m3 = gg3$ID)
+
+
+venn.diagram(x = gg4, 
+             category.names = c("kallisto", "HISAT2", "STAR"), 
+             cex = 1.5,   cat.cex = 2,   sub.cex = 2, 
+             filename = '~/public_html/t1.png',
+             output=TRUE,
+             imagetype="png",
+             lty = 'blank',
+             fill=c("pink", "blue", "green"))
+
+#Similarly KEGG based GSEA analysis was also done for common genes for kallisto, HISAT2 and STAR based methods. 
+ids_k_k<-bitr(names(g_k), fromType = "ENSEMBL", toType = "ENTREZID", OrgDb=organism)
+g_kk <- left_join(b_t, ids_k_k, by=c("ensembl_gene_id" = "ENSEMBL"))
+
+k_k <- g_kk$log2FoldChange.x
+
+# Name vector with ENTREZ ids
+names(k_k) <- g_kk$ENTREZID
+
+k_k = sort(k_k, decreasing = TRUE)
+
+kegg_organism = "hsa"
+kk1 <- gseKEGG(geneList     = k_k,
+              organism     = kegg_organism,
+              nPerm        = 10000,
+              minGSSize    = 3,
+              maxGSSize    = 800,
+              pvalueCutoff = 0.05,
+              pAdjustMethod = "none",
+              keyType       = "ncbi-geneid")
+
+#Venn diagram for enriched KEGG terms obtained from different methods was formed.
+
+t1_k= as.data.frame(kk1)
+t1_k = t1_k[t1_k$p.adjust < 0.05,]
+
+t2_k = as.data.frame(kk2)
+t2_k = t2_k[t2_k$p.adjust < 0.05,]
+
+t3_k = as.data.frame(kk3)
+t3_k = t3_k[t3_k$p.adjust < 0.05,]
+
+t4_k <- list(m1 = t1_k$ID,
+            m2 = t2_k$ID, 
+            m3 = t3_k$ID)
+
+
+venn.diagram(x = t4_k, 
+             category.names = c("kallisto", "HISAT2", "STAR"), 
+             cex = 1.5,   cat.cex = 2,   sub.cex = 2, 
+             filename = '~/public_html/t4_k.png',
+             output=TRUE,
+             imagetype="png",
+             lty = 'blank',
+             fill=c("pink", "blue", "green"))
