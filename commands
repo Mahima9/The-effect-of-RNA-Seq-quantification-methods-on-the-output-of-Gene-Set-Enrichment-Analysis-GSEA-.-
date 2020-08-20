@@ -327,9 +327,9 @@ venn.diagram(x = g4,
              fill=c("pink", "blue", "green"))
 
 #venn diagram for top 20 enriched GO terms by 3 methods
-tg <- list(m1 = g1$ID,
-           m2 = g2$ID, 
-           m3 = g3$ID)
+tg <- list(m1 = g1$ID[1:20],
+           m2 = g2$ID[1:20], 
+           m3 = g3$ID[1:20])
 venn.diagram(x = tg, 
              category.names = c("kallisto", "HISAT2", "STAR"), 
              cex = 1.5,   cat.cex = 2,   sub.cex = 2, 
