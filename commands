@@ -30,7 +30,7 @@ samtools view \
 samtools flagstat ${HISAT2_bam_file}
  
 #quantification by featureCounts using HISAT2 BAM file 
-nohup featureCounts -a ${refrence_GTF_file} \
+featureCounts -a ${refrence_GTF_file} \
 -t exon -g gene_id \
 -o ${HISAT2_quantification_prefix} ${HISAT2_bam_file}
 
@@ -62,7 +62,7 @@ samtools view \
 samtools flagstat ${ STAR_output2_bam_file}
 
 #quantification by featureCounts using HISAT2 and STAR BAM file 
-nohup featureCounts -a ${refrence_GTF_file} \
+featureCounts -a ${refrence_GTF_file} \
 -t exon -g gene_id \
 -o ${quantification_output_prefix} ${bam_file}
 
